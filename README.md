@@ -1,4 +1,4 @@
-# tempo_obs_SiFAP2.py
+# tempo_obs_SiFAP2.py - OLD VERSION, NEED TO DO THAT AGAIN
 
 A lightweight Python script to compute the required observation exposure time for **SiFAP2** (Silicon Fast Optical Photometer 2) proposals at the Telescopio Nazionale Galileo (TNG).
 
