@@ -6,14 +6,17 @@ Raccolta di strumenti per l'analisi e la pianificazione delle osservazioni con S
 |---|---|
 | [`magnitude_SiFAP2.py`](#1-magnitude_sifap2py--airmass-magnitudine-e-flusso) | da data, durata e rate: airmass, magnitudine calibrata e corretta, flusso ottico |
 | [`tempo_obs_SiFAP2_sens.py`](#2-tempo_obs_sifap2_senspy--tempo-di-osservazione-necessario) | da magnitudine e ampiezza attesa: tempo di osservazione necessario per rivelare un segnale pulsato |
+| [`light_curves_SiFAP2.py`](#3-light_curves_sifap2py--nodding-burst-k-e-curva-netta) | da file `.qdp` target + sky: nodding, burst, fattore k, curva netta e rate medi |
 
 ## Requisiti
 
 ```
-pip install astropy numpy scipy
+pip install astropy numpy scipy matplotlib
 ```
 
-(`scipy` serve solo a `tempo_obs_SiFAP2_sens.py`; `astropy` solo a `magnitude_SiFAP2.py`.)
+Ogni script è autonomo e ha bisogno solo di alcune librerie: `astropy` serve a
+`magnitude_SiFAP2.py`, `scipy` a `tempo_obs_SiFAP2_sens.py`, `matplotlib` ai plot di
+`light_curves_SiFAP2.py` (che per il resto usa solo `numpy`).
 
 ## File
 
@@ -23,6 +26,7 @@ pip install astropy numpy scipy
 | `config_example.json` | target, sito, calibrazione: **copialo e compilalo** |
 | `osservazioni_esempio.csv` | esempio di input multiplo |
 | `tempo_obs_SiFAP2_sens.py` | stima interattiva del tempo di osservazione |
+| `light_curves_SiFAP2.py` | analisi delle curve di luce target + sky: nodding, burst, k, curva netta, rate |
 
 ## Convenzione di calibrazione (comune ai due strumenti)
 
@@ -177,3 +181,128 @@ Nel codice sono commentate le estensioni previste:
   lo strumento.
 - Se `sp.special` non viene trovato con versioni vecchie di SciPy, sostituire
   `import scipy as sp` con `from scipy import special` e usare `special.chndtrinc`.
+
+---
+
+## 3. `light_curves_SiFAP2.py` — nodding, burst, k e curva netta
+
+Analizza le curve di luce SiFAP2 con il metodo del **sky shift additivo via nodding**. È uno
+script unico: i parametri si cambiano nel blocco **CONFIGURAZIONE** all'inizio del file, poi si
+lancia
+
+```
+python light_curves_SiFAP2.py
+```
+
+Per una coppia di file `.qdp` (target e sky, 4 colonne: tempo, errore sul tempo, rate, errore sul
+rate) lo script:
+
+1. trova gli episodi di **nodding**, in modo automatico o dagli intervalli indicati
+2. esclude i **burst** dai calcoli (restano visibili nei plot)
+3. calcola il **fattore additivo k**
+4. costruisce il cielo traslato e la **curva netta**
+5. calcola i **rate medi** fuori nodding (target, sky + k, netto)
+6. salva il plot in PDF e, a richiesta, la curva netta e un riepilogo in CSV
+
+### Metodo
+
+```
+k            = <target | nodding> − <sky | riferimento>
+sky traslato = sky + k
+curva netta  = target − sky traslato
+```
+
+I rate medi sono medie pesate (peso 1/σ²), calcolate fuori dai nodding e fuori dai burst. Se
+target e sky hanno griglie temporali diverse, lo sky traslato viene interpolato sui tempi del target.
+
+Il riferimento per lo sky si sceglie con `K_MODE`:
+
+| `K_MODE` | Riferimento per lo sky | Quando usarlo |
+|---|---|---|
+| `"window"` (default) | bin dello sky in una finestra prima (`"pre"`) o dopo (`"post"`) ogni episodio di nodding | curva senza trend marcati |
+| `"simultaneous"` | bin dello sky durante il nodding stesso | curva con trend: target e sky sono simultanei, quindi il trend si cancella |
+
+In modalità `"window"` la finestra si sceglie episodio per episodio (`K_WINDOWS`). Se le finestre
+contengono meno di 3 bin dello sky si usa l'intera baseline.
+
+### Parametri
+
+Tutti nel blocco CONFIGURAZIONE, con commenti e valori di esempio. I tempi sono in secondi.
+
+| Parametro | Significato | Default |
+|---|---|---|
+| `OBS_ID` | nome dell'osservazione (titolo del plot, nomi dei file di output) | dal nome del file (es. `N3`) |
+| `TARGET_FILE` | file `.qdp` del rivelatore target | — |
+| `SKY_FILE` | file `.qdp` dello sky | `<TARGET_FILE>_sky.qdp` |
+| `OUTPUT_DIR` | cartella dove salvare i risultati | cartella del file target |
+| `NODDING` | `None` = rilevamento automatico, oppure `[(t1, t2), ...]` | `None` |
+| `NODDING_THRESHOLD` | auto: rate < soglia × mediana → candidato nodding | `0.95` |
+| `NODDING_MIN_BINS` | auto: bin contigui minimi per un episodio valido | `5` |
+| `BURST` | `[(t1, t2), ...]` esclusi dai calcoli | `[]` |
+| `K_MODE` | `"window"` o `"simultaneous"` | `"window"` |
+| `K_WINDOWS` | solo `"window"`: finestra per episodio, nell'ordine, es. `[("post", 250), ("pre", 250)]` | `None` |
+| `K_WINDOW_DEFAULT` | finestra per gli episodi senza voce in `K_WINDOWS`; `None` = intera baseline | `("pre", 250)` |
+| `START_UTC` | opzionale: inizio osservazione, scritto nella colonna `date` del riepilogo | `None` |
+| `SAVE_PLOT` / `SHOW_PLOT` | salva il PDF / mostra il plot a schermo | `True` / `False` |
+| `SAVE_NET_CSV` | salva la curva netta in CSV | `False` |
+| `SUMMARY_CSV` | file CSV con una riga per osservazione | `None` |
+| `PLOT_YLIM` | limiti dell'asse y del pannello superiore, es. `(23000, 37000)` | automatico |
+| `PLOT_LABEL_DY`, `PLOT_LABEL_DY_NET` | altezza delle etichette nel plot (in sigma) | `5.0`, `3.5` |
+
+Esempi:
+
+```python
+# nodding manuale (due episodi) e un burst, con il cielo preso durante il nodding
+NODDING = [(1063, 1093), (6420, 6456)]
+BURST   = [(4880, 5000)]
+K_MODE  = "simultaneous"
+
+# nodding automatico, con il cielo preso 250 s dopo il primo episodio e 250 s prima del secondo
+NODDING   = None
+K_MODE    = "window"
+K_WINDOWS = [("post", 250), ("pre", 250)]
+```
+
+### Più osservazioni
+
+Per analizzarne più di una in un'esecuzione, elenca in `OBSERVATIONS` solo i parametri che
+cambiano rispetto al blocco principale:
+
+```python
+OBSERVATIONS = [
+    dict(TARGET_FILE="oss_A.qdp", NODDING=[(1063, 1093), (6420, 6456)]),
+    dict(TARGET_FILE="oss_B.qdp", NODDING=None, BURST=[(4880, 5000)], K_MODE="simultaneous"),
+]
+```
+
+Con il valore di default `[{}]` viene analizzata una sola osservazione.
+
+### Output
+
+Nella cartella del file target, oppure in `OUTPUT_DIR`:
+
+- `LC_SiFAP2_<id>_scaled.pdf`: curve target, sky e sky traslato in alto, curva netta in basso;
+  nodding in grigio, finestre per k in giallo, burst in arancione
+- `LC_SiFAP2_<id>_net.csv` (con `SAVE_NET_CSV`): tempo, rate del target, sky traslato, netto e flag
+  `in_nodding` / `in_burst` per ogni bin
+- il file `SUMMARY_CSV`: una riga per osservazione con k e rate medi
+
+### Dal rate alla magnitudine
+
+Al termine di ogni osservazione lo script stampa il rate netto con la durata, pronti per
+`magnitude_SiFAP2.py`:
+
+```
+--rate 5953.52 --rate-err 2.85 --duration 5406.7
+```
+
+Le prime colonne del riepilogo CSV (`id, date, duration, rate, rate_err`) sono quelle richieste
+da `magnitude_SiFAP2.py --obs-file`: imposta `START_UTC` (o compila la colonna `date`) e passa il
+file direttamente a quello script. La durata è quella tra il primo e l'ultimo bin della curva.
+
+### Note
+
+- Se un burst si sovrappone a un nodding, i suoi bin sono esclusi anche dal calcolo di k.
+- Il plot usa un backend non interattivo: senza `SHOW_PLOT` non serve un'interfaccia grafica.
+- Se un'osservazione fallisce (file mancante, nessun nodding trovato), le altre vengono
+  analizzate comunque e l'errore compare nel riepilogo finale.
